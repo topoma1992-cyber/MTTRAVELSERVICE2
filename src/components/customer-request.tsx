@@ -4,7 +4,7 @@ import { getPublicBooking, lookupDiscount, updatePublicBooking } from "@/lib/boo
 import { paymentLabel, type Booking } from "@/lib/bookings";
 import { customerPrice, customerCanEdit, formatWhen, peopleLabel, priceMarked, REMOTE_NOTICE } from "@/lib/format";
 import { farFromBase, routeTrip } from "@/lib/geo";
-import { buildQuote, findDiscount, fleetForPassengers, fleetLabel, normalizeDiscount, serviceInBologna, tripFleet, VEHICLES } from "@/lib/tariff";
+import { buildQuote, fleetForPassengers, fleetLabel, normalizeDiscount, serviceInBologna, tripFleet, VEHICLES } from "@/lib/tariff";
 import type { Place } from "@/lib/types";
 
 const field = "h-12 w-full rounded-md border border-border bg-bg px-3 text-base";
@@ -87,9 +87,7 @@ export function CustomerRequest({ token }: { token: string }) {
         farFromBase(origin, destination),
       ]);
       const code = booking.quote.discountCode ?? "";
-      const found = code
-        ? normalizeDiscount(await lookupDiscount({ data: { code } }).catch(() => findDiscount(code)))
-        : null;
+      const found = code ? normalizeDiscount(await lookupDiscount({ data: { code } }).catch(() => null)) : null;
       const quote = buildQuote({
         vehicle: forced,
         km: route.km,

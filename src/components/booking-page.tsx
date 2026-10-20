@@ -25,9 +25,9 @@ import {
 } from "@/lib/bookings";
 import { addClock, bagsLabel, customerCanEdit, customerPrice, euro, formatWhen, peopleLabel, priceMarked, toISODate, validEmail, validPhone } from "@/lib/format";
 import { farFromBase, reversePlace, routeTrip } from "@/lib/geo";
-import { submitBooking } from "@/lib/bookings.functions";
+import { issueBookingGuard, submitBooking } from "@/lib/bookings.functions";
 import { useI18n } from "@/lib/i18n";
-import { listPublicDiscounts, lookupDiscount } from "@/lib/bookings.functions";
+import { lookupDiscount } from "@/lib/bookings.functions";
 import { EXTRA_PRICES, VEHICLES, billedWaitMinutes, buildQuote, discountFits, discountSummary, findDiscount, fleetForPassengers, fleetLabel, gapWaitMinutes, normalizeDiscount, priceSplit, serviceInBologna, tripFleet, waitBlockLabel, DEFAULT_DISCOUNTS, type DiscountRule } from "@/lib/tariff";
 import type { MapData, Place, RouteResult, VehicleId } from "@/lib/types";
 
@@ -135,6 +135,8 @@ export function BookingPage() {
   const discountRule = scalapay ? null : findDiscount(discountCode, discountCatalog);
   const [privacy, setPrivacy] = useState(false);
   const [terms, setTerms] = useState(false);
+  const [guard, setGuard] = useState("");
+  const [companyWebsite, setCompanyWebsite] = useState("");
   const [errors, setErrors] = useState<Errors>({});
   const [route, setRoute] = useState<RouteResult | null>(null);
   const [routing, setRouting] = useState(false);
@@ -284,17 +286,17 @@ export function BookingPage() {
 
   useEffect(() => {
     let alive = true;
-    void listPublicDiscounts()
-      .then((rows) => {
-        if (!alive || rows.length === 0) return;
-        const next = rows.map((row) => normalizeDiscount(row)).filter((row): row is DiscountRule => Boolean(row));
-        if (next.length > 0) setDiscountCatalog(next);
+    void issueBookingGuard()
+      .then((row) => {
+        if (alive) setGuard(row.guard);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (alive) setGuard("");
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [formKey]);
 
   useEffect(() => {
     const code = discountCode.trim().toUpperCase();
@@ -446,6 +448,8 @@ export function BookingPage() {
           paymentMethod: paymentMethod || ("" as PaymentMethod),
           quote,
           pageOrigin: window.location.origin,
+          guard,
+          companyWebsite,
         },
       });
       setSent(booking);
@@ -1042,6 +1046,15 @@ export function BookingPage() {
                 </span>
               </label>
               {errors.terms ? <p className="text-sm font-medium text-primary">{errors.terms}</p> : null}
+              <div className="absolute -left-[9999px] h-px w-px overflow-hidden" aria-hidden="true">
+                <input
+                  tabIndex={-1}
+                  autoComplete="off"
+                  name="mt_leave_blank"
+                  value={companyWebsite}
+                  onChange={(event) => setCompanyWebsite(event.target.value)}
+                />
+              </div>
               {errors.route ? (
                 <p className="text-sm font-medium text-primary" data-invalid="true">
                   {errors.route}

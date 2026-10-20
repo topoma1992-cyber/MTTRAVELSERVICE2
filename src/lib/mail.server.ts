@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import type { Sql } from "@/lib/db";
 import { BANK, paymentLabel, type Booking } from "@/lib/bookings";
 import { customerPrice, formatWhen, priceMarked, REMOTE_NOTICE } from "@/lib/format";
@@ -156,17 +157,70 @@ function escapeHtml(value: string) {
     .replace(/"/g, "&" + "quot;");
 }
 
+const SECRET_PREFIX = "enc:";
+let staffKeyWarned = false;
+
+function staffKey() {
+  const raw = process.env.STAFF_SECRET_KEY?.trim() ?? "";
+  if (!raw) {
+    if (!staffKeyWarned) {
+      staffKeyWarned = true;
+      console.warn("STAFF_SECRET_KEY mancante: la password Gmail resta in chiaro.");
+    }
+    return null;
+  }
+  const key = Buffer.from(raw, "base64");
+  if (key.length !== 32) {
+    if (!staffKeyWarned) {
+      staffKeyWarned = true;
+      console.warn("STAFF_SECRET_KEY deve essere 32 byte in base64: la password Gmail resta in chiaro.");
+    }
+    return null;
+  }
+  return key;
+}
+
+export function sealSecret(plain: string) {
+  const key = staffKey();
+  if (!key) return plain;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const body = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `${SECRET_PREFIX}${Buffer.concat([iv, tag, body]).toString("base64")}`;
+}
+
+export function openSecret(stored: string) {
+  if (!stored.startsWith(SECRET_PREFIX)) return stored;
+  const key = staffKey();
+  if (!key) {
+    console.warn("Password Gmail cifrata, ma STAFF_SECRET_KEY non è disponibile.");
+    return "";
+  }
+  try {
+    const raw = Buffer.from(stored.slice(SECRET_PREFIX.length), "base64");
+    const iv = raw.subarray(0, 12);
+    const tag = raw.subarray(12, 28);
+    const body = raw.subarray(28);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+  } catch {
+    console.warn("Password Gmail non decifrabile.");
+    return "";
+  }
+}
+
 type AlertRow = { notify_email: string; smtp_user: string; smtp_pass: string };
 
 export async function loadAlerts(sql: Sql) {
   const rows = await sql<AlertRow>`select notify_email, smtp_user, smtp_pass from staff_alerts where id = 1`;
-  return (
-    rows[0] ?? {
-      notify_email: "info@mttravelservice.com",
-      smtp_user: "info@mttravelservice.com",
-      smtp_pass: "",
-    }
-  );
+  const row = rows[0];
+  return {
+    notify_email: row?.notify_email || "info@mttravelservice.com",
+    smtp_user: row?.smtp_user || "info@mttravelservice.com",
+    smtp_pass: openSecret(row?.smtp_pass ?? ""),
+  };
 }
 
 export async function deliverMail(options: {

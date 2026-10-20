@@ -209,25 +209,7 @@ export type DiscountRule = {
   vehicle: "all" | "car" | "van";
 };
 
-export const DEFAULT_DISCOUNTS: DiscountRule[] = [
-  { code: "RICCIO5", active: true, totalPercent: 5, ridePercent: 0, minFare: 0, nightPercent: 0, holidayPercent: 0, waitPercent: 0, meetGreetFree: false, maxAmount: 0, vehicle: "all" },
-  { code: "RICCIO10", active: true, totalPercent: 10, ridePercent: 0, minFare: 0, nightPercent: 0, holidayPercent: 0, waitPercent: 0, meetGreetFree: false, maxAmount: 0, vehicle: "all" },
-  { code: "RICCIO15", active: true, totalPercent: 15, ridePercent: 0, minFare: 0, nightPercent: 0, holidayPercent: 0, waitPercent: 0, meetGreetFree: false, maxAmount: 0, vehicle: "all" },
-  { code: "RICCIO20", active: true, totalPercent: 20, ridePercent: 0, minFare: 0, nightPercent: 0, holidayPercent: 0, waitPercent: 0, meetGreetFree: false, maxAmount: 0, vehicle: "all" },
-  {
-    code: "CONVENZIONE20",
-    active: true,
-    totalPercent: 0,
-    ridePercent: 20,
-    minFare: 60,
-    nightPercent: 5,
-    holidayPercent: 5,
-    waitPercent: 5,
-    meetGreetFree: true,
-    maxAmount: 0,
-    vehicle: "all",
-  },
-];
+export const DEFAULT_DISCOUNTS: DiscountRule[] = [];
 
 export function normalizeDiscount(value: unknown): DiscountRule | null {
   if (!value || typeof value !== "object") return null;

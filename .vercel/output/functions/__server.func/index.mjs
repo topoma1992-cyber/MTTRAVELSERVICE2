@@ -12,9 +12,13 @@ var install_page_default = "<!DOCTYPE html>\n<html lang=\"en\" class=\"device-de
 //#endregion
 //#region \0virtual:grok-og-identity
 var grokOgIdentity = { "site": {
-	"title": "MT Travel",
+	"title": "MT TRAVEL SERVICE",
+	"description": "Prenotazione transfer con conducente. Auto fino a 4 passeggeri, van fino a 8.",
 	"card": "custom",
-	"image": "/og.jpg"
+	"color": "101412",
+	"creator": false,
+	"image": "/og.jpg",
+	"banner": "/x-banner.jpg"
 } };
 //#endregion
 //#region scripts/grok-pwa-shared.mjs

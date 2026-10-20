@@ -23,7 +23,7 @@ import {
 import { RequestActions } from "@/components/request-actions";
 import { AlertSettings } from "@/components/alert-settings";
 import { DiscountCodes } from "@/components/discount-codes";
-import { StaffAccess } from "@/components/staff-access";
+import { StaffAccess, OwnerClaim } from "@/components/staff-access";
 import { StaffEdit } from "@/components/staff-edit";
 import { StaffQuote } from "@/components/staff-quote";
 import { PaymentBadge } from "@/components/payment-marks";
@@ -126,13 +126,9 @@ function RichiestePage() {
 
       {phase === "loading" ? <p className="mt-8 text-muted">Carico…</p> : null}
       {phase === "setup" ? (
-        <PinForm
-          title="Crea il codice"
-          hint="Il codice vale per info@mttravelservice.com. È l'unico accesso finché non ne aggiungi altri."
-          submitLabel="Crea codice"
-          confirm
-          onSubmit={async (next) => {
-            await claimStaff({ data: { pin: next } });
+        <OwnerClaim
+          onSubmit={async (next, setupCode) => {
+            await claimStaff({ data: { pin: next, setupCode } });
             await openWith(OWNER_EMAIL, next);
           }}
         />
@@ -144,7 +140,16 @@ function RichiestePage() {
         />
       ) : null}
 
-      {phase === "ready" ? <StaffAccess staffEmail={staffEmail} pin={pin} /> : null}
+      {phase === "ready" ? (
+        <StaffAccess
+          staffEmail={staffEmail}
+          pin={pin}
+          onPinChanged={(next) => {
+            setPin(next);
+            localStorage.setItem(SESSION_KEY, JSON.stringify({ staffEmail, pin: next }));
+          }}
+        />
+      ) : null}
       {phase === "ready" ? <AlertSettings staffEmail={staffEmail} pin={pin} /> : null}
       {phase === "ready" ? <DiscountCodes staffEmail={staffEmail} pin={pin} /> : null}
       {phase === "ready" ? <StaffQuote staffEmail={staffEmail} pin={pin} onSaved={(booking) => setBookings((current) => [booking, ...current])} /> : null}
@@ -381,82 +386,6 @@ function NoticeBell({ bookings }: { bookings: Booking[] }) {
         </div>
       ) : null}
     </div>
-  );
-}
-
-function PinForm({
-  title,
-  hint,
-  submitLabel,
-  confirm = false,
-  onSubmit,
-  onError,
-}: {
-  title: string;
-  hint: string;
-  submitLabel: string;
-  confirm?: boolean;
-  onSubmit: (pin: string) => Promise<void>;
-  onError?: (message: string) => void;
-}) {
-  const [pin, setPin] = useState("");
-  const [again, setAgain] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  return (
-    <form
-      className="mt-8 grid max-w-md gap-3 rounded-lg border border-border bg-surface p-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (pin.trim().length < 4) {
-          setError("Almeno 4 caratteri.");
-          return;
-        }
-        if (confirm && pin !== again) {
-          setError("I due codici non coincidono.");
-          return;
-        }
-        setBusy(true);
-        setError("");
-        void onSubmit(pin.trim())
-          .catch((reason: unknown) => {
-            const message = reason instanceof Error ? reason.message : "Non riuscito.";
-            setError(message);
-            onError?.(message);
-            setBusy(false);
-          });
-      }}
-    >
-      <p className="font-medium">{title}</p>
-      <p className="text-sm text-muted">{hint}</p>
-      <input
-        type="password"
-        autoComplete={confirm ? "new-password" : "current-password"}
-        value={pin}
-        onChange={(event) => setPin(event.target.value)}
-        placeholder="Codice"
-        className="h-12 rounded-md border border-border bg-bg px-3 text-base"
-      />
-      {confirm ? (
-        <input
-          type="password"
-          autoComplete="new-password"
-          value={again}
-          onChange={(event) => setAgain(event.target.value)}
-          placeholder="Ripeti il codice"
-          className="h-12 rounded-md border border-border bg-bg px-3 text-base"
-        />
-      ) : null}
-      {error ? <p className="text-sm font-medium text-primary">{error}</p> : null}
-      <button
-        type="submit"
-        disabled={busy}
-        className="inline-flex h-12 items-center justify-center rounded-md bg-primary px-5 font-medium text-primary-fg disabled:opacity-50"
-      >
-        {busy ? "Attendi…" : submitLabel}
-      </button>
-    </form>
   );
 }
 

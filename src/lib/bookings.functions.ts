@@ -8,9 +8,21 @@ type PinInput = { staffEmail?: string; pin?: string };
 
 const OWNER_EMAIL = "info@mttravelservice.com";
 
+const BAD_LOGIN = "Mail o codice non validi.";
+const LOCKED_LOGIN = "Troppi tentativi. Riprova tra qualche minuto.";
+const LOCK_BASE_MS = 15 * 60 * 1000;
+const LOCK_MAX_MS = 24 * 60 * 60 * 1000;
+const DUMMY_PIN_HASH = `${"ab".repeat(16)}:${"cd".repeat(32)}`;
+
 function cleanPin(value: unknown) {
   const pin = typeof value === "string" ? value.trim() : "";
   if (pin.length < 4 || pin.length > 40) throw new Error("Il codice deve avere almeno 4 caratteri.");
+  return pin;
+}
+
+function cleanNewPin(value: unknown) {
+  const pin = typeof value === "string" ? value.trim() : "";
+  if (pin.length < 8 || pin.length > 40) throw new Error("Il codice deve avere almeno 8 caratteri.");
   return pin;
 }
 
@@ -46,11 +58,38 @@ async function pinTools() {
 async function requirePin(email: string, pin: string) {
   const { getSql } = await import("@/lib/db");
   const sql = await getSql();
+  const attempts = await sql<{ failed: number | string; locked_until: string | Date | null }>`
+    select failed, locked_until from staff_attempts where email = ${email}
+  `;
+  const attempt = attempts[0];
+  const lockedUntil = attempt?.locked_until ? new Date(attempt.locked_until).getTime() : 0;
+  if (lockedUntil > Date.now()) throw new Error(LOCKED_LOGIN);
+
   const rows = await sql<{ pin_hash: string }>`select pin_hash from staff_logins where email = ${email}`;
   const stored = rows[0]?.pin_hash;
-  if (!stored) throw new Error("Mail o codice non validi.");
   const tools = await pinTools();
-  if (!tools.matches(pin, stored)) throw new Error("Mail o codice non validi.");
+  const valid = stored ? tools.matches(pin, stored) : (tools.matches(pin, DUMMY_PIN_HASH), false);
+  if (!valid) {
+    const failed = Number(attempt?.failed ?? 0) + 1;
+    const step = failed % 5 === 0 ? Math.min(20, failed / 5) : 0;
+    const lockMs = step > 0 ? Math.min(LOCK_MAX_MS, LOCK_BASE_MS * 2 ** (step - 1)) : 0;
+    const locked = lockMs > 0 ? new Date(Date.now() + lockMs).toISOString() : null;
+    const now = new Date().toISOString();
+    await sql`
+      insert into staff_attempts (email, failed, locked_until, updated_at)
+      values (${email}, ${failed}, ${locked}, ${now})
+      on conflict (email) do update
+      set failed = excluded.failed, locked_until = excluded.locked_until, updated_at = excluded.updated_at
+    `;
+    throw new Error(BAD_LOGIN);
+  }
+
+  const now = new Date().toISOString();
+  await sql`
+    update staff_attempts
+    set failed = 0, locked_until = null, updated_at = ${now}
+    where email = ${email}
+  `;
   return sql;
 }
 
@@ -184,9 +223,17 @@ export const staffStatus = createServerFn({ method: "GET" }).handler(async () =>
 });
 
 export const claimStaff = createServerFn({ method: "POST" })
-  .validator((input: PinInput) => ({ pin: cleanPin(input?.pin) }))
+  .validator((input: { pin?: string; setupCode?: string }) => ({
+    pin: cleanNewPin(input?.pin),
+    setupCode: typeof input?.setupCode === "string" ? input.setupCode : "",
+  }))
   .handler(async ({ data }) => {
+    const { createHash, timingSafeEqual } = await import("node:crypto");
     const { getSql } = await import("@/lib/db");
+    const expected = process.env.STAFF_SETUP_CODE ?? "";
+    const left = createHash("sha256").update(data.setupCode).digest();
+    const right = createHash("sha256").update(expected).digest();
+    if (!expected || !timingSafeEqual(left, right)) throw new Error("Codice di attivazione non valido.");
     const sql = await getSql();
     const rows = await sql<{ email: string }>`select email from staff_logins where owner = true limit 1`;
     if (rows[0]) throw new Error("L'accesso esiste già.");
@@ -215,7 +262,7 @@ export const saveStaffLogin = createServerFn({ method: "POST" })
   .validator((input: PinInput & { loginEmail?: string; loginPin?: string }) => ({
     ...cleanAuth(input),
     loginEmail: cleanEmail(input?.loginEmail),
-    loginPin: cleanPin(input?.loginPin),
+    loginPin: cleanNewPin(input?.loginPin),
   }))
   .handler(async ({ data }) => {
     const sql = await requirePin(data.staffEmail, data.pin);
@@ -234,6 +281,25 @@ export const saveStaffLogin = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+export const changeStaffPin = createServerFn({ method: "POST" })
+  .validator((input: PinInput & { nextPin?: string }) => ({
+    ...cleanAuth(input),
+    nextPin: cleanNewPin(input?.nextPin),
+  }))
+  .handler(async ({ data }) => {
+    const sql = await requirePin(data.staffEmail, data.pin);
+    const rows = await sql<{ owner: boolean | string }>`select owner from staff_logins where email = ${data.staffEmail}`;
+    const owner = rows[0]?.owner === true || rows[0]?.owner === "t" || rows[0]?.owner === "true";
+    if (!owner) throw new Error("Solo il titolare può cambiare questo codice.");
+    const tools = await pinTools();
+    await sql`
+      update staff_logins
+      set pin_hash = ${tools.hash(data.nextPin)}
+      where email = ${data.staffEmail} and owner = true
+    `;
+    return { ok: true as const };
+  });
+
 export const removeStaffLogin = createServerFn({ method: "POST" })
   .validator((input: PinInput & { loginEmail?: string }) => ({
     ...cleanAuth(input),
@@ -246,14 +312,32 @@ export const removeStaffLogin = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+export const issueBookingGuard = createServerFn({ method: "GET" }).handler(async () => {
+  const { getSql } = await import("@/lib/db");
+  const { issueGuardToken } = await import("@/lib/request-guard.server");
+  const sql = await getSql();
+  return { guard: await issueGuardToken(sql) };
+});
+
 export const submitBooking = createServerFn({ method: "POST" })
   .validator((input: unknown) => {
     const body = asRecord(input, "Richiesta");
-    return { ...incomingBooking(body), pageOrigin: text(body.pageOrigin, 300) };
+    return {
+      ...incomingBooking(body),
+      pageOrigin: text(body.pageOrigin, 300),
+      guard: text(body.guard, 200),
+      companyWebsite: text(body.companyWebsite, 200),
+    };
   })
   .handler(async ({ data }) => {
     const { getSql } = await import("@/lib/db");
+    const { assertNewRequest } = await import("@/lib/request-guard.server");
     const sql = await getSql();
+    await assertNewRequest(sql, {
+      guard: data.guard,
+      honeypot: data.companyWebsite,
+      email: data.customer.email,
+    });
     const id = crypto.randomUUID();
     const code = makeBookingCode();
     const created = new Date().toISOString();
@@ -628,9 +712,15 @@ export const updatePublicBooking = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const { sql, booking: current } = await bookingByToken(data.token);
     const { customerCanEdit } = await import("@/lib/format");
+    const { assertPublicEdit } = await import("@/lib/request-guard.server");
     if (!customerCanEdit(current.trip.date, current.trip.time)) {
       throw new Error("La modifica è possibile solo fino a 48 ore prima del viaggio.");
     }
+    await assertPublicEdit(sql, {
+      token: data.token,
+      email: data.customer.email,
+      previousEmail: current.customer.email,
+    });
     await sql`
       update bookings
       set status = 'pending',
@@ -674,9 +764,11 @@ export const saveAlertSettings = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const sql = await requirePin(data.staffEmail, data.pin);
     if (data.smtpPass) {
+      const { sealSecret } = await import("@/lib/mail.server");
+      const stored = sealSecret(data.smtpPass);
       await sql`
         update staff_alerts
-        set notify_email = ${data.notifyEmail}, smtp_user = ${data.notifyEmail}, smtp_pass = ${data.smtpPass}
+        set notify_email = ${data.notifyEmail}, smtp_user = ${data.notifyEmail}, smtp_pass = ${stored}
         where id = 1
       `;
     } else {
@@ -786,27 +878,6 @@ export const listDiscountCodes = createServerFn({ method: "POST" })
     const rows = await sql<DiscountRow>`select * from discount_codes order by code`;
     return rows.map(toDiscount);
   });
-
-export const listPublicDiscounts = createServerFn({ method: "GET" }).handler(async () => {
-  const { getSql } = await import("@/lib/db");
-  const sql = await getSql();
-  const rows = await sql<DiscountRow>`
-    select code, active,
-      total_percent::float8 as total_percent,
-      ride_percent::float8 as ride_percent,
-      min_fare::float8 as min_fare,
-      night_percent::float8 as night_percent,
-      holiday_percent::float8 as holiday_percent,
-      wait_percent::float8 as wait_percent,
-      max_discount::float8 as max_discount,
-      vehicle,
-      meet_greet_free
-    from discount_codes
-    where active = true
-    order by code
-  `;
-  return rows.map(toDiscount);
-});
 
 export const lookupDiscount = createServerFn({ method: "POST" })
   .validator((input: { code?: string }) => text(input?.code, 20).toUpperCase().replace(/[^A-Z0-9]/g, ""))
